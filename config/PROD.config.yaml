@@ -1,0 +1,51 @@
+base: !include_parsed base.yaml
+
+queue:
+  value: &airflow_queue airflow.aws.de.common.default.prod
+
+override-pipeline:
+  env: !override
+    key: base.pipeline.env
+    value: prod
+  queue: !override
+    key: base.pipeline.queue
+    value: *airflow_queue
+
+override-airflow_config:
+  dag:
+    catchup: !override
+      key: base.airflow_config.dag.catchup
+      value: False
+    default_args:
+      start_date: !override
+        key: base.airflow_config.dag.default_args.start_date
+        value: !datetime 2020-11-18 00:00
+      email: !override
+        key: base.airflow_config.dag.default_args.email
+        value: !flattened_set
+          - !airflow_list email_ds_platform_prod
+          - !airflow_list email_pager_duty
+      email_on_failure: !override
+        key: base.airflow_config.dag.default_args.email_on_failure
+        value: False
+      retries: !override
+        key: base.airflow_config.dag.default_args.retries
+        value: 0
+
+override-emr_config:
+  job_flow_overrides:
+    master_instance_type: !override
+      key: base.emr_config.job_flow_overrides.master_instance_type
+      value: m6g.xlarge
+    core_instance_type: !override
+      key: base.emr_config.job_flow_overrides.core_instance_type
+      value: m6g.2xlarge
+    core_instance_count: !override
+      key: base.emr_config.job_flow_overrides.core_instance_count
+      value: 2
+    core_ebs_configuration: !override
+      key: base.emr_config.job_flow_overrides.core_ebs_configuration
+      value:
+        size_in_gb: 64
+        volume_type: gp3
+        volumes_per_instance: 1

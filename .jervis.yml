@@ -1,0 +1,20 @@
+language: python
+python: 3.6
+node_js: 12
+install: true
+script: true
+branches:
+  only:
+    - master
+    - /^[0-9.]+-hotfix$/
+    - test
+jenkins:
+  pipeline_jenkinsfile: .ci/cicd-aws_Jenkinsfile.groovy
+  vault_secrets: true
+env:
+  global:
+    - AWS_DEFAULT_REGION=us-east-1
+agent_custom_setup: |
+  pip install -r requirements.txt \
+    --extra-index-url https://nexus.303net.net/repository/hosted-pypi/simple/ \
+    --trusted-host nexus.303net.net 

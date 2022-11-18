@@ -1,0 +1,50 @@
+plugins {
+    id 'maven'
+    id 'maven-publish'
+    id 'distribution'
+}
+
+ext.ossrhUsername = hasProperty('ossrhUsername')?project['ossrhUsername']:''
+ext.ossrhPassword = hasProperty('ossrhPassword')?project['ossrhPassword']:''
+version = "$version" // artifact version
+group = "$group"
+if (group == '') {
+    throw new InvalidUserDataException("Build requires group name")
+}
+
+// creates .zip and .gzip archives, .gzip is created from .tar and .tar preserves file permissions
+// use .gzip if permissions need to be preserved
+
+distributions {
+    main {
+        baseName = System.getenv('JERVIS_PROJECT')
+        contents {
+            from ("./pipeline") {
+                into "pipeline"
+            }
+            from ("./config") {
+                into "config"
+            }
+        }
+    }
+}
+
+// compresses .tar file created by distributions plugin
+distTar {
+    compression = Compression.GZIP
+}
+
+uploadArchives {
+    repositories {
+        mavenDeployer {
+            repository(url: nexusReleaseRepo) {
+                authentication(userName: nexusUsername, password: nexusPassword)
+            }
+            snapshotRepository(url: nexusSnapshotsRepo) {
+                authentication(userName: nexusUsername, password: nexusPassword)
+            }
+        }
+    }
+}
+
+defaultTasks 'clean', 'distZip'

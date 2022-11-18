@@ -1,0 +1,188 @@
+major_version: !load_version &major_version version.txt:version:major
+minor_version: !load_version &minor_version version.txt:version:minor
+patch_version: !load_version &patch_version version.txt:version:patch
+
+artifact:
+  version: !template_string &artifact_version
+    template: v${major}.${minor}.${patch}
+    major: *major_version
+    minor: *minor_version
+    patch: *patch_version
+
+pipeline:
+  name: &pipeline_name airflow-dag-template
+  tag_name: &pipeline_tag_name airflow_dag_template
+  domain: &domain ds
+  product: &product common
+  env: &env !override_needed
+  version: !template_string &pipeline_version
+    template: ${major}
+    major: *major_version
+  id: !template_string &pipeline_id
+    template: ${domain}-${product}-${pipeline_name}
+    domain: *domain
+    product: *product
+    pipeline_name: *pipeline_name
+  queue: &queue !override_needed
+  owner: &pipeline_owner !template_string
+    template: ${lob}-airflow-${env}
+    lob: *product
+    env: *env
+
+airflow_config:
+  dag:
+    id: !template_string
+      template: ${pipeline_id}-v${pipeline_version}-${env}
+      pipeline_id: *pipeline_id
+      pipeline_version: *pipeline_version
+      env: *env
+    schedule_interval: 0 2 * * *
+    max_active_runs: 1
+    concurrency: 1
+    catchup: !override_needed
+    default_args:
+      start_date: !override_needed
+      owner: *pipeline_owner
+      email: !override_needed
+      depends_on_past: False
+      email_on_failure: !override_needed
+      email_on_retry: False
+      retries: !override_needed
+      retry_delay: !seconds 5m
+      queue: *queue
+
+airflow_dates:
+  date: !date &execution_date
+    hour_offset: 6
+  hour: !date &execution_hour
+    hour_offset: 6
+    override_key: override_hour
+    date_format: '%H'
+
+xcom_variables:
+  run_id: !macro macros.datetime.utcnow().strftime("%Y%m%d%H%M%S") + "_" + macros.uuid.uuid4().hex[0:8]
+  date: *execution_date
+  hour: *execution_hour
+  lob_datalake_bucket: !template_string
+    template: iasdl-datalake-processed-ue1-${lob}-${env}
+    lob: *product
+    env: *env
+
+variables:
+  run_id: !xcom_var &run_id
+    key: run_id
+  date: !xcom_var &date
+    key: date
+  hour: !xcom_var &hour
+    key: hour
+  lob_datalake_bucket: !xcom_var &lob_datalake_bucket
+    key: lob_datalake_bucket
+  hive_staging_dir: !template_string &hive_staging_dir
+    template: /tmp/hive/${pipeline}-pipeline/${runtime_date}
+    pipeline: *pipeline_name
+    runtime_date: !date
+      date_format: '%Y%m%d%H%M'
+
+emr_config:
+  base_stack_name: !template_string
+    template: ${domain_designator}-${lob}-${name}-${env}-${date}
+    domain_designator: *domain
+    lob: *product
+    name: *pipeline_name
+    env: *env
+    date: !date
+      date_format: '%Y%m%d%H'
+  resource_tags:
+    project: !template_string
+      template: ${lob}-${pipeline}
+      lob: *product
+      pipeline: *pipeline_tag_name
+    team: *product
+    user: *pipeline_owner
+  pipeline_resources_location: &pipeline_resources_location !template_string
+    template: s3://iasrf-vcs-mixed-ue1-de-${env}/${lob}/airflow/${pipeline_id}/${version}/pipeline
+    env: *env
+    lob: *product
+    pipeline_id: *pipeline_id
+    version: *artifact_version
+  job_flow_overrides:
+    app_list: ['Hadoop', 'Hive', 'Spark']
+    emr_release_label: 'emr-6.4.0'
+    ec2_subnet_ids: !airflow_list emr_subnets
+    emr_managed_master_security_group: !airflow_variable emr_managed_master_security_group
+    emr_managed_slave_security_group: !airflow_variable emr_managed_worker_security_group
+    service_access_security_group: !airflow_variable emr_service_access_security_group
+    service_role: !template_string
+      template: ${lob}-${pipeline}-EMR-Service-Role
+      lob: *product
+      pipeline: *pipeline_name
+    job_flow_role: !template_string
+      template: ${lob}-${pipeline}-EMR-Instance-Role
+      lob: *product
+      pipeline: *pipeline_name
+    auto_scaling_role: !template_string
+      template: ${lob}-${pipeline}-EMR-AutoScaling-Role
+      lob: *product
+      pipeline: *pipeline_name
+    cluster_composition: fleet
+    master_instance_type: !override_needed
+    master_instance_count: 1
+    core_instance_type: !override_needed
+    core_instance_count: !override_needed
+    core_ebs_configuration: !override_needed
+    log_uri: !template_string
+      template: s3://iaspl-pipeline-logging-ue1-de-${env}/${lob}/${pipeline}/emr_logs/${date}/
+      env: *env
+      lob: *product
+      pipeline: *pipeline_name
+      date: !date
+        date_format: '%Y%m%d%H%M'
+    additional_classification_props:
+      - classification: 'hive-site'
+        configuration_properties:
+          hive.exec.stagingdir: *hive_staging_dir
+          hive.exec.scratchdir: *hive_staging_dir
+      - classification: 'spark-env'
+        configurations:
+          - classification: 'export'
+            configuration_properties:
+              PYSPARK_PYTHON: '/usr/bin/python3'
+      - classification: 'spark-defaults'
+        configuration_properties:
+          spark.hadoop.aws.glue.catalog.separator: '/'
+          spark.hadoop.mapreduce.input.fileinputformat.input.dir.recursive: 'True'
+          spark.hadoop.parquet.filter.stats.enabled: 'True'
+          spark.sql.hive.convertMetastoreParquet: 'False'
+          spark.sql.hive.metastorePartitionPruning: 'True'
+          spark.sql.parquet.filterPushdown: 'True'
+          spark.sql.adaptive.enabled: 'True'
+  alarm:
+    topic: !template_string
+      template: ${lob}-resource-utilization-reports-${env}
+      lob: *product
+      env: *env
+    idle_timeout: 30
+
+connections:
+  aws:
+    conn_id: &aws_conn_id aws_default
+    account: !template_string
+      template: ias-${env}
+      env: *env
+    region: &aws_region us-east-1
+
+job_config:
+#placeholder
+
+airflow_tasks:
+#placeholder
+
+# regression
+tasks_config:
+  common:
+    email_on_failure: False
+  comparator:
+    retry_delay: !seconds 1m
+  status:
+    email_on_failure: True
+    retries: 0
